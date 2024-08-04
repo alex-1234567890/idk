@@ -1,0 +1,111 @@
+const { Client, GatewayIntentBits, SlashCommandBuilder, Routes } = require('discord.js');
+const { REST } = require('@discordjs/rest');
+const { token, clientId, guildId } = require('./config.json');
+
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+
+const commands = [
+  new SlashCommandBuilder()
+    .setName('giveaway')
+    .setDescription('Start a giveaway')
+    .addIntegerOption(option => 
+      option.setName('time')
+        .setDescription('Time in seconds for the giveaway duration')
+        .setRequired(true))
+    .addStringOption(option => 
+      option.setName('prize')
+        .setDescription('Description of the prize')
+        .setRequired(true))
+    .addRoleOption(option => 
+      option.setName('requiredrole')
+        .setDescription('Role required to enter the giveaway')
+        .setRequired(false))
+    .addRoleOption(option => 
+      option.setName('blacklistrole')
+        .setDescription('Role that is not allowed to enter the giveaway')
+        .setRequired(false))
+    .addRoleOption(option => 
+      option.setName('bonusrole')
+        .setDescription('Role that gets bonus entries')
+        .setRequired(false))
+]
+.map(command => command.toJSON());
+
+const rest = new REST({ version: '10' }).setToken(token);
+
+(async () => {
+  try {
+    console.log('Started refreshing application (/) commands.');
+
+    await rest.put(
+      Routes.applicationGuildCommands(clientId, guildId),
+      { body: commands },
+    );
+
+    console.log('Successfully reloaded application (/) commands.');
+  } catch (error) {
+    console.error(error);
+  }
+})();
+
+client.once('ready', () => {
+  console.log(`Logged in as ${client.user.tag}!`);
+});
+
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isCommand()) return;
+
+  const { commandName } = interaction;
+
+  if (commandName === 'giveaway') {
+    const time = interaction.options.getInteger('time');
+    const prize = interaction.options.getString('prize');
+    const requiredRole = interaction.options.getRole('requiredrole');
+    const blacklistRole = interaction.options.getRole('blacklistrole');
+    const bonusRole = interaction.options.getRole('bonusrole');
+
+    const message = await interaction.reply({ content: `🎉 **GIVEAWAY TIME** 🎉\nPrize: ${prize}\nReact with 🎉 to enter!\nTime: ${time} seconds`, fetchReply: true });
+    message.react('🎉');
+
+    setTimeout(async () => {
+      const updatedMessage = await interaction.channel.messages.fetch(message.id);
+      const reactions = updatedMessage.reactions.cache.get('🎉');
+
+      if (!reactions) {
+        return interaction.followUp('No one participated in the giveaway.');
+      }
+
+      const users = await reactions.users.fetch();
+      users.delete(client.user.id);
+
+      const validUsers = users.filter(user => {
+        const member = interaction.guild.members.cache.get(user.id);
+        if (blacklistRole && member.roles.cache.has(blacklistRole.id)) {
+          return false;
+        }
+        if (requiredRole && !member.roles.cache.has(requiredRole.id)) {
+          return false;
+        }
+        return true;
+      });
+
+      if (validUsers.size === 0) {
+        return interaction.followUp('No one eligible participated in the giveaway.');
+      }
+
+      const bonusUsers = [];
+      validUsers.forEach(user => {
+        const member = interaction.guild.members.cache.get(user.id);
+        bonusUsers.push(user);
+        if (bonusRole && member.roles.cache.has(bonusRole.id)) {
+          bonusUsers.push(user); // Add an extra entry for bonus role
+        }
+      });
+
+      const winner = bonusUsers[Math.floor(Math.random() * bonusUsers.length)];
+      interaction.followUp(`Congratulations ${winner}, you won the **${prize}**!`);
+    }, time * 1000);
+  }
+});
+
+client.login(token);
